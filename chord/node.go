@@ -11,13 +11,18 @@ import (
 
 	"crypto/sha1"
 	"math/big"
+
 	//采用sha1进行一致性哈希
+
+	"math/rand"
 )
 
 const m = 160
 const n = 10 //后继列表长度
 
 func init() {
+	//设置随机数种子
+	rand.Seed(time.Now().UnixNano())
 	f, _ := os.Create("dht-chord-test.log")
 	logrus.SetOutput(f)
 }
@@ -25,6 +30,11 @@ func init() {
 type Pair struct {
 	Key   string
 	Value string
+}
+
+type PS struct {
+	Pre string
+	Suc string
 }
 
 // Hash Function
@@ -117,6 +127,15 @@ func ContainOpen(Left *big.Int, Right *big.Int, Current *big.Int) bool {
 	}
 }
 
+// Caculate 计算fingerTable
+func Caculate(key *big.Int, i int) *big.Int {
+	powerOfTwo := new(big.Int).Lsh(big.NewInt(1), uint(i-1))
+	sum := new(big.Int).Add(key, powerOfTwo)
+	modulus := new(big.Int).Lsh(big.NewInt(1), uint(m))
+	result := new(big.Int).Mod(sum, modulus)
+	return result
+}
+
 // 在node n的finger table中寻找identifier k的最近的predecessor
 // 没有通信故不为RPC method
 func (node *ChordNode) ClosestPrecedingFinger(key *big.Int) string {
@@ -124,7 +143,6 @@ func (node *ChordNode) ClosestPrecedingFinger(key *big.Int) string {
 	for i := m; i >= 1; i-- {
 		//注意，这里读fingerTable时要上锁
 		node.fingerLock.RLock()
-		//TODO 这里是错误的，不应该这么写
 		current := node.fingerTable[i]
 		node.fingerLock.RUnlock()
 		if !node.ping(node.fingerTable[i]) { //check online
@@ -160,7 +178,7 @@ func (node *ChordNode) Stabilize() {
 		node.successorList[0] = predecessor
 		node.suLock.Unlock()
 		//当前结点的后继发生改变，意味着backup Data 发生了改变
-		// node np ns  需要修改 np ns 的backupData
+		// node np ns  需要修改 np  的backupData
 		//TODO!
 	}
 	err1 := node.RemoteCall(successor, "ChordNode.Notify", node.Addr, nil)
@@ -170,6 +188,7 @@ func (node *ChordNode) Stabilize() {
 }
 
 // notify 函数 对ns调用 传入插入节点n ip
+// np n ns
 func (node *ChordNode) Notify(target string, reply *struct{}) error {
 	var predecessor string
 	node.GetPredecessor("", &predecessor)
@@ -184,7 +203,17 @@ func (node *ChordNode) Notify(target string, reply *struct{}) error {
 
 // fix_finger 函数 更新fingerTable
 func (node *ChordNode) fix_finger() {
-
+	i := rand.Intn(159) + 2
+	var successor string
+	err := node.FindSuccessor(Caculate(node.ID, i), &successor)
+	if err != nil {
+		logrus.Error("Fix finger table failed:", err)
+		return
+	}
+	node.fingerLock.Lock()
+	node.fingerTable[i] = successor
+	node.fingerLock.Unlock()
+	logrus.Infof("Node %s Fix finger", node.Addr)
 }
 
 // maintain 函数
@@ -252,6 +281,8 @@ func (node *ChordNode) GetSuccessorList(_ string, reply *[n + 1]string) error {
 	return nil
 }
 
+// 注意，这里找的是key的Successor，而不是Node
+// 二者的successor的定义存在差异
 func (node *ChordNode) FindSuccessor(key *big.Int, reply *string) error {
 	logrus.Infof("Find successor of %v from node %s with %v", key, node.Addr, node.ID)
 	if key.Cmp(node.ID) == 0 {
@@ -364,12 +395,46 @@ func (node *ChordNode) Join(addr string) bool {
 
 //}
 
-//几个和数据库处理相关的函数 RPC Method
-//删除成功reply true 否则false
-//func (node *ChordNode) DeleteDataBackup(key []string,reply *bool) error{
+// 几个和数据库处理清除相关的函数 RPC Method
+func (node *ChordNode) DeleteDataBackup(key []string, reply *struct{}) error {
+	node.dataBackupLock.Lock()
+	for i := range key {
+		_, ok := node.dataBackup[key[i]]
+		if ok {
+			delete(node.dataBackup, key[i])
+		}
+	}
+	node.dataBackupLock.Unlock()
+	return nil
+}
 
-//}
+func (node *ChordNode) DeleteData(key []string, reply *struct{}) error {
+	node.dataLock.Lock()
+	for i := range key {
+		_, ok := node.data[key[i]]
+		if ok {
+			delete(node.data, key[i])
+		}
+	}
+	node.dataLock.Unlock()
+	return nil
+}
 
-//func (node *ChordNode) DeleteData(key []string,reply *bool) error{
+func (node *ChordNode) DeleteNode(key []string, reply *struct{}) error {
+	node.DeleteData(key, nil)
+	var successor string
+	err := node.GetSuccessor("", &successor)
+	if err != nil {
+		logrus.Error("Get successor Failed:", err)
+		return err
+	}
+	err1 := node.RemoteCall(successor, "ChordNode.DeleteDataBackup", key, nil)
+	if err1 != nil {
+		logrus.Error("Delete successor's backup data failed:", err1)
+		return err1
+	}
+	return nil
+}
 
-//}
+// 一个移动备用数据的函数
+func (node *ChordNode) MoveBackup()
