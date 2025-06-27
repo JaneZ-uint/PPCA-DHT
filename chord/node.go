@@ -37,6 +37,11 @@ type PS struct {
 	Suc string
 }
 
+type BV struct {
+	IsGet bool
+	Value string
+}
+
 // Hash Function
 func ConsistentHash(addr string) *big.Int {
 	h := sha1.New()
@@ -378,68 +383,187 @@ func (node *ChordNode) Join(addr string) bool {
 	return true
 }
 
-//Put a key-value pair into the network (if key exists, update the value).
+// Put a key-value pair into the network (if key exists, update the value).
 // Return "true" if success, "false" otherwise.
-//func (node *ChordNode) Put(key string, value string) bool{
-
-//}
+func (node *ChordNode) Put(key string, value string) bool {
+	keyID := ConsistentHash(key)
+	var successor string
+	err := node.FindSuccessor(keyID, &successor)
+	if err != nil {
+		logrus.Error("Put failed when finding successor:", err)
+		return false
+	}
+	var data []Pair
+	data = append(data, Pair{key, value})
+	err1 := node.RemoteCall(successor, "ChordNode.UpdateNode", data, nil)
+	if err1 != nil {
+		logrus.Error("Update node failed:", err1)
+		return false
+	}
+	return true
+}
 
 // Get a key-value pair from the network.
 // Return "true" and the value if success, "false" otherwise.
-//func (node *ChordNode) Get(key string) (bool, string) {
-
-//}
+func (node *ChordNode) Get(key string) (bool, string) {
+	keyID := ConsistentHash(key)
+	var successor string
+	err := node.FindSuccessor(keyID, &successor)
+	if err != nil {
+		logrus.Error("Get failed when finding successor:", err)
+		return false, ""
+	}
+	var target BV
+	err1 := node.RemoteCall(successor, "ChordNode.GetValue", key, &target)
+	if err1 != nil {
+		logrus.Error("Getvalue failed:", err1)
+		return false, ""
+	}
+	return target.IsGet, target.Value
+}
 
 // Remove a key-value pair identified by KEY from the network.
 // Return "true" if success, "false" otherwise.
-//func (node *ChordNode) Delete(key string) bool {
+func (node *ChordNode) Delete(key string) bool {
+	keyID := ConsistentHash(key)
+	var successor string
+	err := node.FindSuccessor(keyID, &successor)
+	if err != nil {
+		logrus.Error("Delete failed when finding successor:", err)
+		return false
+	}
+	var reply bool
+	err1 := node.RemoteCall(successor, "ChordNode.DeleteNode", key, &reply)
+	if err1 != nil {
+		logrus.Error("Delete failed:", err1)
+		return false
+	}
+	if reply == true {
+		return true
+	}
+	return false
+}
 
-//}
+// "Normally" quit from current network.
+// You can inform other nodes in the network that you are leaving.
+// "Quit" will not be called before "Create" or "Join".
+// For a dhtNode, "Quit" may be called for many times.
+// For a quited node, call "Quit" again should have no effect.
+func (node *ChordNode) Quit() {
+
+}
+
+// Quit the network without informing other nodes.
+// "ForceQuit" will be checked by TA manually.
+func (node *ChordNode) ForceQuit() {
+
+}
 
 // 几个和数据库处理相关的函数 RPC Method
-func (node *ChordNode) DeleteDataBackup(key []string, reply *struct{}) error {
+//
+// 数据清除
+func (node *ChordNode) DeleteDataBackup(key []string, reply *bool) error {
+	*reply = true
 	node.dataBackupLock.Lock()
 	for i := range key {
+		_, ok := node.data[key[i]]
+		if !ok {
+			*reply = false
+		}
 		delete(node.dataBackup, key[i])
 	}
 	node.dataBackupLock.Unlock()
 	return nil
 }
 
-func (node *ChordNode) DeleteData(key []string, reply *struct{}) error {
+func (node *ChordNode) DeleteData(key []string, reply *bool) error {
+	*reply = true
 	node.dataLock.Lock()
 	for i := range key {
+		_, ok := node.dataBackup[key[i]]
+		if !ok {
+			*reply = false
+		}
 		delete(node.data, key[i])
 	}
 	node.dataLock.Unlock()
 	return nil
 }
 
-func (node *ChordNode) DeleteNode(key []string, reply *struct{}) error {
-	node.DeleteData(key, nil)
+func (node *ChordNode) DeleteNode(key []string, reply *bool) error {
+	var isData bool
+	node.DeleteData(key, &isData)
 	var successor string
 	err := node.GetSuccessor("", &successor)
 	if err != nil {
 		logrus.Error("Get successor Failed:", err)
 		return err
 	}
-	err1 := node.RemoteCall(successor, "ChordNode.DeleteDataBackup", key, nil)
+	var isBackup bool
+	err1 := node.RemoteCall(successor, "ChordNode.DeleteDataBackup", key, &isBackup)
 	if err1 != nil {
 		logrus.Error("Delete successor's backup data failed:", err1)
 		return err1
 	}
+	if isBackup && isData {
+		*reply = true
+	} else {
+		*reply = false
+	}
 	return nil
 }
 
-// 更新数据的函数
+// 更新数据的函数（Actually 是对称的）
 func (node *ChordNode) UpdateData(data []Pair, reply *struct{}) error {
+	node.dataLock.Lock()
+	for _, value := range data {
+		node.data[value.Key] = value.Value
+	}
+	node.dataLock.Unlock()
+	return nil
+}
 
+func (node *ChordNode) UpdateBackup(backup []Pair, reply *struct{}) error {
+	node.dataBackupLock.Lock()
+	for _, value := range backup {
+		node.dataBackup[value.Key] = value.Value
+	}
+	node.dataBackupLock.Unlock()
+	return nil
+}
+
+func (node *ChordNode) UpdateNode(info []Pair, reply *struct{}) error {
+	node.UpdateData(info, nil)
+	var successor string
+	node.GetSuccessor("", &successor)
+	err := node.RemoteCall(successor, "ChordNode.UpdateBackup", info, nil)
+	if err != nil {
+		logrus.Error("Update backup failed:", err)
+		return err
+	}
+	return nil
+}
+
+// 从数据库中得到某个值
+func (node *ChordNode) GetValue(key string, reply *BV) error {
+	node.dataLock.RLock()
+	value, ok := node.data[key]
+	node.dataLock.RUnlock()
+	if !ok {
+		reply.IsGet = false
+		reply.Value = ""
+	} else {
+		reply.IsGet = true
+		reply.Value = value
+	}
+
+	return nil
 }
 
 // 一个移动备用数据的函数
-// n np ns   n和ns的backup数据要改
-// np的backup 给n，n的data给np
-func (node *ChordNode) MoveBackup(ps PS, reply *struct{}) error {
+//q n np ns   n和ns的backup数据要改
+//发现了一个问题，移动的数据并不完全，很遗憾了
+/*func (node *ChordNode) MoveBackup(ps PS, reply *struct{}) error {
 	predecessor := ps.Pre
 	successor := ps.Suc
 	var data []Pair
@@ -447,10 +571,11 @@ func (node *ChordNode) MoveBackup(ps PS, reply *struct{}) error {
 	var key []string
 	var keyBackup []string
 	node.dataLock.Lock()
+	SucID := ConsistentHash(successor)
 	for k, v := range node.data {
 		data = append(data, Pair{k, v})
 		key = append(key, k)
 	}
 	node.dataLock.Unlock()
 
-}
+}*/
