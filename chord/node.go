@@ -180,6 +180,7 @@ func (node *ChordNode) Stabilize() {
 		//当前结点的后继发生改变，意味着backup Data 发生了改变
 		// node np ns  需要修改 np  的backupData
 		//TODO!
+
 	}
 	err1 := node.RemoteCall(successor, "ChordNode.Notify", node.Addr, nil)
 	if err1 != nil {
@@ -395,14 +396,11 @@ func (node *ChordNode) Join(addr string) bool {
 
 //}
 
-// 几个和数据库处理清除相关的函数 RPC Method
+// 几个和数据库处理相关的函数 RPC Method
 func (node *ChordNode) DeleteDataBackup(key []string, reply *struct{}) error {
 	node.dataBackupLock.Lock()
 	for i := range key {
-		_, ok := node.dataBackup[key[i]]
-		if ok {
-			delete(node.dataBackup, key[i])
-		}
+		delete(node.dataBackup, key[i])
 	}
 	node.dataBackupLock.Unlock()
 	return nil
@@ -411,10 +409,7 @@ func (node *ChordNode) DeleteDataBackup(key []string, reply *struct{}) error {
 func (node *ChordNode) DeleteData(key []string, reply *struct{}) error {
 	node.dataLock.Lock()
 	for i := range key {
-		_, ok := node.data[key[i]]
-		if ok {
-			delete(node.data, key[i])
-		}
+		delete(node.data, key[i])
 	}
 	node.dataLock.Unlock()
 	return nil
@@ -436,5 +431,26 @@ func (node *ChordNode) DeleteNode(key []string, reply *struct{}) error {
 	return nil
 }
 
+// 更新数据的函数
+func (node *ChordNode) UpdateData(data []Pair, reply *struct{}) error {
+
+}
+
 // 一个移动备用数据的函数
-func (node *ChordNode) MoveBackup()
+// n np ns   n和ns的backup数据要改
+// np的backup 给n，n的data给np
+func (node *ChordNode) MoveBackup(ps PS, reply *struct{}) error {
+	predecessor := ps.Pre
+	successor := ps.Suc
+	var data []Pair
+	var backup []Pair
+	var key []string
+	var keyBackup []string
+	node.dataLock.Lock()
+	for k, v := range node.data {
+		data = append(data, Pair{k, v})
+		key = append(key, k)
+	}
+	node.dataLock.Unlock()
+
+}
