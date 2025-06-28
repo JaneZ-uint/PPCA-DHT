@@ -58,7 +58,7 @@ type ChordNode struct {
 	ID     *big.Int //After Hashing
 
 	QuitSign chan bool
-	//QuitLock sync.RWMutex
+	QuitLock sync.RWMutex
 	*network.NetworkStation
 
 	//暂时全上锁，后根据需要更改
@@ -483,13 +483,35 @@ func (node *ChordNode) Delete(key string) bool {
 func (node *ChordNode) Quit() {
 	logrus.Infof("[Quit] Node %s start quit", node.Addr)
 	if !node.online {
-		logrus.Error("[Quit] Node already quit", node.Addr)
+		logrus.Error("[Quit] Node already quit:", node.Addr)
 		return
 	}
+	//TODO
+	//maintain操作停止
+	node.QuitLock.Lock()
 	node.online = false
+	node.QuitLock.Unlock()
 	var predecessor string
 	node.GetPredecessor("", &predecessor)
 	node.UpdateSuccessorList()
+	var modify [n + 1]string
+	node.suLock.RLock()
+	for i := 0; i <= n; i++ {
+		modify[i] = node.successorList[i]
+	}
+	node.suLock.RUnlock()
+	err := node.RemoteCall(predecessor, "ChordNode.ModifySuccessList", modify, nil)
+	if err != nil {
+		logrus.Error("[Quit] Failed modifying successlist:", err)
+		return
+	}
+	err1 := node.RemoteCall(modify[0], "ChordNode.UpdatePredecessor", predecessor, nil)
+	if err1 != nil {
+		logrus.Error("[Quit] Failed updating predecessor:", err1)
+		return
+	}
+	//数据转移
+	//TODO
 
 }
 
@@ -640,5 +662,15 @@ func (node *ChordNode) UpdatePredecessor(target string, reply *struct{}) error {
 	node.preLock.Lock()
 	node.predecessor = target
 	node.preLock.Unlock()
+	return nil
+}
+
+// 修改后继列表 对于Quit的结点的前驱，更新其后继列表
+func (node *ChordNode) ModifySuccessList(modify [n + 1]string, reply *struct{}) error {
+	node.suLock.Lock()
+	for i := 0; i <= n; i++ {
+		node.successorList[i] = modify[i]
+	}
+	node.suLock.Unlock()
 	return nil
 }
