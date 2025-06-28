@@ -266,7 +266,7 @@ func (node *ChordNode) UpdateSuccessorList() {
 	logrus.Infof("[UpdateSuccessorList] Node %s", node.Addr)
 	var tmp [n + 1]string
 	node.GetSuccessorList("", &tmp)
-	for i, ip := range tmp {
+	for _, ip := range tmp {
 		if node.ping(ip) {
 			//第一个活的node
 			var info [n + 1]string
@@ -281,7 +281,7 @@ func (node *ChordNode) UpdateSuccessorList() {
 			}
 			node.successorList[0] = ip
 			node.suLock.Unlock()
-			//TODO
+			return
 		}
 	}
 }
@@ -481,10 +481,15 @@ func (node *ChordNode) Delete(key string) bool {
 // For a dhtNode, "Quit" may be called for many times.
 // For a quited node, call "Quit" again should have no effect.
 func (node *ChordNode) Quit() {
+	logrus.Infof("[Quit] Node %s start quit", node.Addr)
 	if !node.online {
+		logrus.Error("[Quit] Node already quit", node.Addr)
 		return
 	}
-	logrus.Error("[Quit] Node", node.Addr)
+	node.online = false
+	var predecessor string
+	node.GetPredecessor("", &predecessor)
+	node.UpdateSuccessorList()
 
 }
 
@@ -610,6 +615,8 @@ func (node *ChordNode) GetDataForBackup(_ string, backup *(map[string]string)) e
 	return nil
 }
 
+// Some functions for Quit
+// np n ns n失效后，需要将自身的backup数据移交给第一个存活后继的backup中
 func (node *ChordNode) BackupAddData(_ string, reply *struct{}) error {
 	var newInfo []Pair
 	node.dataBackupLock.RLock()
@@ -619,10 +626,19 @@ func (node *ChordNode) BackupAddData(_ string, reply *struct{}) error {
 	node.dataBackupLock.RUnlock()
 	node.dataBackupLock.Lock()
 	node.dataBackup = make(map[string]string)
+	node.dataBackupLock.Unlock()
 	err := node.UpdateNode(newInfo, nil)
 	if err != nil {
 		logrus.Error("[BackupAddData] Update Node Failed:", err)
 		return err
 	}
+	return nil
+}
+
+// 将node的predecessor修改为target
+func (node *ChordNode) UpdatePredecessor(target string, reply *struct{}) error {
+	node.preLock.Lock()
+	node.predecessor = target
+	node.preLock.Unlock()
 	return nil
 }
