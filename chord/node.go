@@ -406,7 +406,7 @@ func (node *ChordNode) Join(addr string) bool {
 	node.suLock.Lock()
 	node.successorList[0] = successor
 	node.suLock.Unlock()
-	//显然这里缺东西了，fingerTable和后继列表都没有初始化
+
 	node.preLock.Lock()
 	node.predecessor = ""
 	node.preLock.Unlock()
@@ -507,12 +507,50 @@ func (node *ChordNode) Quit() {
 	}
 	err1 := node.RemoteCall(modify[0], "ChordNode.UpdatePredecessor", predecessor, nil)
 	if err1 != nil {
-		logrus.Error("[Quit] Failed updating predecessor:", err1)
+		logrus.Error("[Quit] Failed to update predecessor:", err1)
 		return
 	}
 	//数据转移
-	//TODO
+	//首先修改后继结点的data 以及后继的后继的backup
+	var data []Pair
+	var dataKey []string
+	node.dataLock.RLock()
+	for k, v := range node.data {
+		data = append(data, Pair{k, v})
+		dataKey = append(dataKey, k)
+	}
+	node.dataLock.RUnlock()
+	err2 := node.RemoteCall(modify[0], "ChordNode.UpdateNode", data, nil)
+	if err2 != nil {
+		logrus.Error("[Quit] Failed to updata node:", err2)
+		return
+	}
 
+	//修改后继结点backup
+	//首先清空后继结点原有backup（backup事实上就是node.data）
+	err3 := node.RemoteCall(modify[0], "ChordNode.DeleteDataBackup", dataKey, nil)
+	if err3 != nil {
+		logrus.Error("[Quit] Failed to delete successor's backup:", err3)
+		return
+	}
+	//获得当前结点原本的backup 作为后继结点的新backup
+	var backup []Pair
+	node.dataBackupLock.RLock()
+	for k, v := range node.dataBackup {
+		backup = append(backup, Pair{k, v})
+	}
+	node.dataBackupLock.RUnlock()
+	node.dataBackupLock.Lock()
+	node.dataBackup = make(map[string]string)
+	node.dataBackupLock.Unlock()
+	err4 := node.RemoteCall(modify[0], "ChordNode.UpdateBackup", backup, nil)
+	if err4 != nil {
+		logrus.Error("[Quit] Failed to update node:", err4)
+		return
+	}
+
+	node.QuitLock.Unlock()
+	node.StopRPCServer()
 }
 
 // Quit the network without informing other nodes.
@@ -629,33 +667,15 @@ func (node *ChordNode) GetValue(key string, reply *BV) error {
 // 获得某个结点的data 用于backup的更新
 func (node *ChordNode) GetDataForBackup(_ string, backup *(map[string]string)) error {
 	*backup = make(map[string]string)
-	node.dataBackupLock.RLock()
+	node.dataLock.RLock()
 	for k, v := range node.data {
 		(*backup)[k] = v
 	}
-	node.dataBackupLock.RUnlock()
+	node.dataLock.RUnlock()
 	return nil
 }
 
 // Some functions for Quit
-// np n ns n失效后，需要将自身的backup数据移交给第一个存活后继的backup中
-func (node *ChordNode) BackupAddData(_ string, reply *struct{}) error {
-	var newInfo []Pair
-	node.dataBackupLock.RLock()
-	for k, v := range node.dataBackup {
-		newInfo = append(newInfo, Pair{k, v})
-	}
-	node.dataBackupLock.RUnlock()
-	node.dataBackupLock.Lock()
-	node.dataBackup = make(map[string]string)
-	node.dataBackupLock.Unlock()
-	err := node.UpdateNode(newInfo, nil)
-	if err != nil {
-		logrus.Error("[BackupAddData] Update Node Failed:", err)
-		return err
-	}
-	return nil
-}
 
 // 将node的predecessor修改为target
 func (node *ChordNode) UpdatePredecessor(target string, reply *struct{}) error {
