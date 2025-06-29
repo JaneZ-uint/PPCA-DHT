@@ -16,13 +16,20 @@ type NetworkStation struct {
 	addr      string
 }
 
-func (node *NetworkStation) Init(Addr string) {
-	node.addr = Addr
+func (node *NetworkStation) InitRPC(Node interface{}, server string) {
+	logrus.Infof("[InitRPC] Start init rpc")
+	node.server = rpc.NewServer()
+	err := node.server.RegisterName(server, Node)
+	if err != nil {
+		logrus.Error("[Init RPC] Failed:", err)
+	} else {
+		logrus.Info("[Init RPC] Success")
+	}
 }
 
-func (node *NetworkStation) RunRPCServer(chordNode interface{}, wg *sync.WaitGroup) {
-	node.server = rpc.NewServer()
-	node.server.Register(chordNode)
+func (node *NetworkStation) RunRPCServer(Addr string, wg *sync.WaitGroup) {
+	node.listening = true
+	node.addr = Addr
 	var err error
 	node.listener, err = net.Listen("tcp", node.addr)
 	wg.Done()
@@ -42,11 +49,6 @@ func (node *NetworkStation) RunRPCServer(chordNode interface{}, wg *sync.WaitGro
 func (node *NetworkStation) StopRPCServer() {
 	node.listening = false
 	node.listener.Close()
-}
-
-func (node *NetworkStation) Run(origin interface{}, wg *sync.WaitGroup) {
-	node.listening = true
-	node.RunRPCServer(origin, wg)
 }
 
 // RemoteCall
