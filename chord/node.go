@@ -42,6 +42,11 @@ type BV struct {
 	Value string
 }
 
+type Tmp struct {
+	First  string
+	Second string
+}
+
 // Hash Function
 func ConsistentHash(addr string) *big.Int {
 	h := sha1.New()
@@ -164,13 +169,16 @@ func (node *ChordNode) ClosestPrecedingFinger(key *big.Int) string {
 // stabilize 函数
 func (node *ChordNode) Stabilize() {
 	//logrus.Infof("[Stabilize] Node %s stabilizing", node.Addr)
+	node.UpdateSuccessorList()
 	var successor string
+	logrus.Infof("[Stabilize] Node %s stabilizing", node.Addr)
 	node.GetSuccessor("", &successor)
+	logrus.Infof("[Stabilize] Node %s gets successor", node.Addr)
 	var successorID *big.Int
 	successorID = ConsistentHash(successor)
 	var predecessor string
 	err := node.RemoteCall(successor, "chord.GetPredecessor", "", &predecessor)
-	logrus.Infof("[Stabilize] Node's predecessor is: %s", predecessor)
+	//logrus.Infof("[Stabilize] Node's predecessor is: %s", predecessor)
 	if err != nil {
 		//logrus.Error("[Stabilize] Can't find Predecessor:", err)
 		return
@@ -186,12 +194,67 @@ func (node *ChordNode) Stabilize() {
 		}
 		node.successorList[0] = predecessor
 		node.suLock.Unlock()
+		err2 := node.RemoteCall(successor, "chord.DealWithData", Tmp{node.Addr, predecessor}, nil)
+		if err2 != nil {
+			logrus.Error("[Stabilize] Failed dealing with data", err2)
+			return
+		}
 	}
 	node.GetSuccessor("", &successor)
 	err1 := node.RemoteCall(successor, "chord.Notify", node.Addr, nil)
 	if err1 != nil {
 		//logrus.Error("[Stabilize] Failed Notify:", err1)
 	}
+}
+
+// 对ns调用 传入插入节点n ip 和旧前驱的ip
+func (node *ChordNode) DealWithData(target Tmp, reply *struct{}) error {
+	var todeleteDataKey []string
+	var todeleteData []Pair
+	node.dataLock.RLock()
+	for k, v := range node.data {
+		if !Contain(ConsistentHash(target.Second), node.ID, ConsistentHash(k)) {
+			todeleteDataKey = append(todeleteDataKey, k)
+			todeleteData = append(todeleteData, Pair{k, v})
+		}
+	}
+	node.dataLock.RUnlock()
+	var first string
+	first = target.First
+	var second string
+	second = target.Second
+	err := node.DeleteNode(todeleteDataKey, new(bool)) //修改3 data
+	if err != nil {
+		logrus.Error("[DealWithData] Failed to delete data", err)
+		return err
+	}
+	err2 := node.UpdateBackup(todeleteData, nil) //更新 3 backup
+	if err2 != nil {
+		logrus.Error("[DealWithData] Failed to update dataup", err2)
+		return err2
+	}
+	err1 := node.RemoteCall(second, "chord.UpdateData", todeleteData, nil) //更新2 data
+	if err1 != nil {
+		logrus.Error("[DealWithData] Failed to update second's data", err1)
+		return err1
+	}
+	var todeleteBackup []Pair
+	var todeleteBackupKey []string
+	node.dataBackupLock.RLock()
+	for k, v := range node.dataBackup {
+		if !Contain(ConsistentHash(first), ConsistentHash(second), ConsistentHash(k)) {
+			todeleteBackup = append(todeleteBackup, Pair{k, v})
+			todeleteBackupKey = append(todeleteBackupKey, k)
+		}
+	}
+	node.dataBackupLock.RUnlock()
+	node.DeleteDataBackup(todeleteBackupKey, new(bool)) //删3backup
+	err3 := node.RemoteCall(second, "chord.UpdateBackup", todeleteBackup, nil)
+	if err3 != nil {
+		logrus.Error("[DealWithData] Failed to update backup", err3)
+		return err3
+	}
+	return nil
 }
 
 // notify 函数 对ns调用 传入插入节点n ip
@@ -206,11 +269,20 @@ func (node *ChordNode) Notify(target string, reply *struct{}) error {
 		node.predecessor = target
 		node.preLock.Unlock()
 		//更新backup
-		err := node.RemoteCall(target, "chord.GetDataForBackup", "", &node.dataBackup)
+		/*err := node.RemoteCall(target, "chord.GetDataForBackup", "", &node.dataBackup)
 		if err != nil {
 			logrus.Error("[Notify] failed when updating backup:", err)
 			return err
 		}
+		var currentData []string
+		node.dataLock.RLock()
+		for k, _ := range node.data {
+			if !Contain(ConsistentHash(target), node.ID, ConsistentHash(k)) {
+				currentData = append(currentData, k)
+			}
+		}
+		node.dataLock.RUnlock()
+		node.DeleteNode(currentData, new(bool))*/
 	}
 	return nil
 }
@@ -322,17 +394,22 @@ func (node *ChordNode) UpdateSuccessorList() {
 
 func (node *ChordNode) GetSuccessor(_ string, reply *string) error {
 	//logrus.Infof("[GetSuccessor] Node %s gets its successor", node.Addr)
-	node.UpdateSuccessorList()
-	node.suLock.RLock()
+	//node.UpdateSuccessorList()
+	/*node.suLock.RLock()
+	defer node.suLock.RUnlock()
 	for i := 0; i <= n; i++ {
 		if node.ping(node.successorList[i]) {
 			*reply = node.successorList[i]
-			node.suLock.RUnlock()
+			//node.suLock.RUnlock()
 			return nil
 		}
 	}
+	//node.suLock.RUnlock()
+	return errors.New("no successor")*/
+	node.suLock.RLock()
+	*reply = node.successorList[0]
 	node.suLock.RUnlock()
-	return errors.New("no successor")
+	return nil
 }
 
 func (node *ChordNode) GetPredecessor(_ string, reply *string) error {
@@ -446,14 +523,10 @@ func (node *ChordNode) Join(addr string) bool {
 		logrus.Error("[Join] Find Successor Failed:", err2)
 		return false
 	}
-	logrus.Infof("[Join] Node %s finds its successor %s", node.Addr, successor)
+	//logrus.Infof("[Join] Node %s finds its successor %s", node.Addr, successor)
 	node.suLock.Lock()
 	node.successorList[0] = successor
 	node.suLock.Unlock()
-
-	node.preLock.Lock()
-	node.predecessor = ""
-	node.preLock.Unlock()
 	node.maintain() //双链表维护
 	return true
 }
@@ -461,6 +534,7 @@ func (node *ChordNode) Join(addr string) bool {
 // Put a key-value pair into the network (if key exists, update the value).
 // Return "true" if success, "false" otherwise.
 func (node *ChordNode) Put(key string, value string) bool {
+	logrus.Infof("[Put] Pair %s", key)
 	keyID := ConsistentHash(key)
 	var successor string
 	err := node.FindSuccessor(keyID, &successor)
@@ -481,6 +555,7 @@ func (node *ChordNode) Put(key string, value string) bool {
 // Get a key-value pair from the network.
 // Return "true" and the value if success, "false" otherwise.
 func (node *ChordNode) Get(key string) (bool, string) {
+	logrus.Infof("[Get] Pair %s", key)
 	keyID := ConsistentHash(key)
 	var successor string
 	err := node.FindSuccessor(keyID, &successor)
@@ -500,7 +575,7 @@ func (node *ChordNode) Get(key string) (bool, string) {
 // Remove a key-value pair identified by KEY from the network.
 // Return "true" if success, "false" otherwise.
 func (node *ChordNode) Delete(key string) bool {
-	//logrus.Infof("[Delete] Node %s start deleting", node.Addr)
+	logrus.Infof("[Delete] Node %s start deleting", node.Addr)
 	keyID := ConsistentHash(key)
 	var successor string
 	err := node.FindSuccessor(keyID, &successor)
@@ -588,8 +663,8 @@ func (node *ChordNode) Quit() {
 		logrus.Error("[Quit] Failed to update node:", err4)
 		return
 	}
-	node.QuitLock.Unlock()
 	node.StopRPCServer()
+	node.QuitLock.Unlock()
 }
 
 // Quit the network without informing other nodes.
@@ -776,6 +851,15 @@ func (node *ChordNode) GetDataForBackup(_ string, backup *(map[string]string)) e
 
 // 将node的predecessor修改为target
 func (node *ChordNode) UpdatePredecessor(target string, reply *struct{}) error {
+	var pre string
+	node.preLock.RLock()
+	pre = node.predecessor
+	node.preLock.RUnlock()
+	if pre != "" && !node.ping(pre) {
+		node.preLock.Lock()
+		node.predecessor = ""
+		node.preLock.Unlock()
+	}
 	node.preLock.Lock()
 	node.predecessor = target
 	node.preLock.Unlock()
@@ -784,6 +868,7 @@ func (node *ChordNode) UpdatePredecessor(target string, reply *struct{}) error {
 
 // 修改后继列表 对于Quit的结点的前驱，更新其后继列表
 func (node *ChordNode) ModifySuccessList(modify [n + 1]string, reply *struct{}) error {
+	logrus.Infof("[ModifySuccessList] Node %s ModifySuccessList", node.Addr)
 	node.suLock.Lock()
 	for i := 0; i <= n; i++ {
 		node.successorList[i] = modify[i]
