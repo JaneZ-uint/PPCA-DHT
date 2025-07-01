@@ -47,6 +47,11 @@ type Tmp struct {
 	Second string
 }
 
+type Info struct {
+	ID   *big.Int
+	Addr string
+}
+
 // Hash Function
 func ConsistentHash(addr string) *big.Int {
 	h := sha1.New()
@@ -151,17 +156,25 @@ func Caculate(key *big.Int, i int) *big.Int {
 // 没有通信故不为RPC method
 func (node *ChordNode) ClosestPrecedingFinger(key *big.Int) string {
 	//logrus.Infof("[ClosestPrecedingFinger] Node %s finds its ClosestPrecedingFinger to %v, node.Addr", node.Addr, key)
-	for i := m; i >= 1; i-- {
+	for i := m; i > 1; i-- {
 		//注意，这里读fingerTable时要上锁
 		node.fingerLock.RLock()
 		current := node.fingerTable[i]
 		node.fingerLock.RUnlock()
-		if !node.ping(node.fingerTable[i]) { //check online
+		if !node.ping(current) { //check online
 			continue
 		}
 		if ContainOpen(node.ID, key, ConsistentHash(current)) {
-			return node.fingerTable[i]
+			return current
 		}
+	}
+	var successor string
+	node.GetSuccessor("", &successor)
+	if node.ping(successor) {
+		if ContainOpen(node.ID, key, ConsistentHash(successor)) {
+			return successor
+		}
+		return node.Addr
 	}
 	return node.Addr
 }
@@ -304,7 +317,7 @@ func (node *ChordNode) fix_finger() {
 
 // maintain 函数
 func (node *ChordNode) maintain() {
-	//logrus.Infof("[maintain] Node %s maintain", node.Addr)
+	logrus.Infof("[maintain] Node %s maintain", node.Addr)
 	//开2个线程，定期进行stabilize 和 fix finger操作
 	go func() {
 		for {
@@ -314,7 +327,7 @@ func (node *ChordNode) maintain() {
 				node.QuitLock.Unlock()
 				break
 			}
-			//logrus.Infof("[maintain] Node %s starts stabilizing", node.Addr)
+			logrus.Infof("[maintain] Node %s starts stabilizing", node.Addr)
 			node.Stabilize()
 			node.QuitLock.Unlock()
 			time.Sleep(50 * time.Millisecond)
@@ -449,6 +462,26 @@ func (node *ChordNode) FindSuccessor(key *big.Int, reply *string) error {
 	return nil
 }
 
+// 此函数为调试方便输出信息而设定
+func (node *ChordNode) FindSuccessorDebug(target Info, reply *string) error {
+	logrus.Infof("[Find successor] of %s ", target.Addr)
+	key := target.ID
+	if key.Cmp(node.ID) == 0 {
+		*reply = node.Addr
+		return nil
+	}
+	err1 := node.FindPredecessor(key, reply)
+	if err1 != nil {
+		logrus.Error("[FindSuccessor] Find predecessor error: ", err1)
+		return err1
+	}
+	err2 := node.RemoteCall(*reply, "chord.GetSuccessor", "", reply)
+	if err2 != nil {
+		return err2
+	}
+	return nil
+}
+
 func (node *ChordNode) FindPredecessor(key *big.Int, reply *string) error {
 	//logrus.Infof("[FindPredecessor] Node %s starts %v Predecessor", node.Addr, key)
 	*reply = node.Addr
@@ -518,12 +551,12 @@ func (node *ChordNode) Join(addr string) bool {
 		return false
 	}
 	var successor string
-	err2 := node.RemoteCall(addr, "chord.FindSuccessor", node.ID, &successor)
+	err2 := node.RemoteCall(addr, "chord.FindSuccessorDebug", Info{node.ID, node.Addr}, &successor)
 	if err2 != nil {
 		logrus.Error("[Join] Find Successor Failed:", err2)
 		return false
 	}
-	//logrus.Infof("[Join] Node %s finds its successor %s", node.Addr, successor)
+	logrus.Infof("[Join] Node %s finds its successor %s", node.Addr, successor)
 	node.suLock.Lock()
 	node.successorList[0] = successor
 	node.suLock.Unlock()
