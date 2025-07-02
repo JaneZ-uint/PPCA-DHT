@@ -182,7 +182,7 @@ func (node *ChordNode) ClosestPrecedingFinger(key *big.Int) string {
 // stabilize 函数
 func (node *ChordNode) Stabilize() {
 	//logrus.Infof("[Stabilize] Node %s stabilizing", node.Addr)
-	node.UpdateSuccessorList()
+	//node.UpdateSuccessorList()
 	var successor string
 	logrus.Infof("[Stabilize] Node %s stabilizing", node.Addr)
 	node.GetSuccessor("", &successor)
@@ -222,6 +222,7 @@ func (node *ChordNode) Stabilize() {
 
 // 对ns调用 传入插入节点n ip 和旧前驱的ip
 func (node *ChordNode) DealWithData(target Tmp, reply *struct{}) error {
+	// first second node
 	var todeleteDataKey []string
 	var todeleteData []Pair
 	node.dataLock.RLock()
@@ -388,12 +389,12 @@ func (node *ChordNode) UpdateSuccessorList() {
 					return
 				}
 				var newBackup []Pair
-				node.dataBackupLock.RLock()
+				node.dataLock.RLock()
 				//rmk: 这里的node是前驱的前驱
 				for k, v := range node.data {
 					newBackup = append(newBackup, Pair{k, v})
 				}
-				node.dataBackupLock.RUnlock()
+				node.dataLock.RUnlock()
 				err2 := node.RemoteCall(ip, "chord.UpdateBackup", newBackup, nil)
 				if err2 != nil {
 					logrus.Error("[UpdateSuccessorList] failed to update backup", err2)
@@ -407,7 +408,7 @@ func (node *ChordNode) UpdateSuccessorList() {
 
 func (node *ChordNode) GetSuccessor(_ string, reply *string) error {
 	//logrus.Infof("[GetSuccessor] Node %s gets its successor", node.Addr)
-	//node.UpdateSuccessorList()
+	node.UpdateSuccessorList()
 	/*node.suLock.RLock()
 	defer node.suLock.RUnlock()
 	for i := 0; i <= n; i++ {
@@ -427,6 +428,14 @@ func (node *ChordNode) GetSuccessor(_ string, reply *string) error {
 
 func (node *ChordNode) GetPredecessor(_ string, reply *string) error {
 	//logrus.Infof("[GetPredecessor] Node %s gets its Predecessor", node.Addr)
+	node.preLock.RLock()
+	predecessor := node.predecessor
+	node.preLock.RUnlock()
+	if predecessor != "" && !node.ping(predecessor) {
+		node.preLock.Lock()
+		node.predecessor = ""
+		node.preLock.Unlock()
+	}
 	node.preLock.RLock()
 	*reply = node.predecessor
 	node.preLock.RUnlock()
@@ -884,15 +893,6 @@ func (node *ChordNode) GetDataForBackup(_ string, backup *(map[string]string)) e
 
 // 将node的predecessor修改为target
 func (node *ChordNode) UpdatePredecessor(target string, reply *struct{}) error {
-	var pre string
-	node.preLock.RLock()
-	pre = node.predecessor
-	node.preLock.RUnlock()
-	if pre != "" && !node.ping(pre) {
-		node.preLock.Lock()
-		node.predecessor = ""
-		node.preLock.Unlock()
-	}
 	node.preLock.Lock()
 	node.predecessor = target
 	node.preLock.Unlock()
@@ -913,11 +913,12 @@ func (node *ChordNode) ModifySuccessList(modify [n + 1]string, reply *struct{}) 
 // 将backup增加到data中
 func (node *ChordNode) AddBackup(_ string, reply *struct{}) error {
 	var backup []Pair
+	var backupKey []string
 	//var backupKey []string
 	node.dataBackupLock.RLock()
 	for k, v := range node.dataBackup {
 		backup = append(backup, Pair{k, v})
-		//backupKey = append(backupKey, k)
+		backupKey = append(backupKey, k)
 	}
 	node.dataBackupLock.RUnlock()
 	node.dataBackupLock.Lock()
