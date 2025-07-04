@@ -130,3 +130,14 @@ func (bucket *Bucket) Update(addr string, online bool) {
 		bucket.PushTail(addr)
 	}
 }
+
+func (bucket *Bucket) All() (nodeList []string) {
+	bucket.BucketLock.RLock()
+	current := bucket.head.Next
+	for current != bucket.tail {
+		nodeList = append(nodeList, current.Addr)
+		current = current.Next
+	}
+	bucket.BucketLock.RUnlock()
+	return nodeList
+}
