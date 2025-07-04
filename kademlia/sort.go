@@ -57,6 +57,7 @@ func (sortList *SortList) Insert(addr string) {
 	current.next = &newUnit
 }
 
+// 前a个未被请求过的结点
 func (sortList *SortList) GetFirstThree() []string {
 	sortList.Lock.Lock()
 	defer sortList.Lock.Unlock()
@@ -71,6 +72,20 @@ func (sortList *SortList) GetFirstThree() []string {
 			break
 		}
 		current = current.next
+	}
+	return list
+}
+
+// 所有未被请求过的结点
+func (sortList *SortList) GetAllUncall() []string {
+	var list []string
+	sortList.Lock.RLock()
+	defer sortList.Lock.RUnlock()
+	current := sortList.head.next
+	for current != sortList.tail {
+		if !current.call {
+			list = append(list, current.addr)
+		}
 	}
 	return list
 }
