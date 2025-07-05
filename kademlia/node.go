@@ -25,6 +25,7 @@ type KademliaNode struct {
 	ID         *big.Int
 	data       map[string]string
 	QuitLock   sync.RWMutex
+	wg         sync.WaitGroup
 }
 
 // Hash Function
@@ -85,6 +86,14 @@ func (node *KademliaNode) Ping(_ string, reply *struct{}) error {
 		return nil
 	}
 	return errors.New("offline")
+}
+
+// k-bucket 的更新
+func (node *KademliaNode) update(addr string, online bool) {
+	index := GetIndex(node.ID, ConsistentHash(addr))
+	if index != -1 {
+		node.BucketList[index].Update(addr, online)
+	}
 }
 
 // "Run" is called after calling "NewNode". You can do some initialization works here.
@@ -148,58 +157,106 @@ func (node *KademliaNode) Delete(key string) bool {
 }
 
 // 返回当前结点知道的距离key最近的k个结点
-func (node *KademliaNode) FindNode(key *big.Int) (kElem []string) {
+// 可能需要修改，再议吧...
+// upd:的确要改（）—— 2025.7.5.1:26
+// upd:并不用改 —— 2025.7.5.1:36
+func (node *KademliaNode) FindNode(key *big.Int, kElem *[]string) error {
 	index := GetIndex(node.ID, key)
 	var list []string
 	if index != -1 {
 		list = node.BucketList[index].All()
-		kElem = append(kElem, list...)
+		*kElem = append(*kElem, list...)
 	}
-	if len(kElem) == k {
-		return kElem
+	if len(*kElem) == k {
+		return nil
 	}
 	for i := index + 1; i <= m; i++ {
 		list = node.BucketList[i].All()
-		if len(kElem)+len(list) < k {
-			kElem = append(kElem, list...)
-		} else if len(kElem)+len(list) == k {
-			kElem = append(kElem, list...)
+		if len(*kElem)+len(list) < k {
+			*kElem = append(*kElem, list...)
+		} else if len(*kElem)+len(list) == k {
+			*kElem = append(*kElem, list...)
 			break
 		} else {
 			for j := 0; j < len(list); j++ {
-				kElem = append(kElem, list[j])
-				if len(kElem) == k {
+				*kElem = append(*kElem, list[j])
+				if len(*kElem) == k {
 					break
 				}
 			}
 			break
 		}
 	}
-	if len(kElem) == k {
-		return kElem
+	if len(*kElem) == k {
+		return nil
 	}
 	for i := index - 1; i >= 0; i-- {
 		list = node.BucketList[i].All()
-		if len(kElem)+len(list) < k {
-			kElem = append(kElem, list...)
-		} else if len(kElem)+len(list) == k {
-			kElem = append(kElem, list...)
+		if len(*kElem)+len(list) < k {
+			*kElem = append(*kElem, list...)
+		} else if len(*kElem)+len(list) == k {
+			*kElem = append(*kElem, list...)
 			break
 		} else {
 			for j := 0; j < len(list); j++ {
-				kElem = append(kElem, list[j])
-				if len(kElem) == k {
+				*kElem = append(*kElem, list[j])
+				if len(*kElem) == k {
 					break
 				}
 			}
 			break
 		}
 	}
-	return kElem
+	return nil
+}
+
+func (node *KademliaNode) CallConcurrency(callList []string, sequence *SortList, key *big.Int) {
+	var wg sync.WaitGroup
+	for i := range callList {
+		wg.Add(1)
+		go func(addr string) {
+			defer wg.Done()
+			var list []string
+			err := node.RemoteCall(addr, "kademlia.FindNode", key, &list)
+			if err != nil {
+				//addr失活 线程可以直接杀死了
+				node.update(addr, false)
+				sequence.Delete(addr)
+				return
+			}
+			//成功则upd
+			node.update(addr, true)
+			for j := range list {
+				sequence.Insert(list[j])
+			}
+		}(callList[i])
+	}
+	wg.Wait()
 }
 
 // 返回整个系统中距离key最近的k个结点
 // 对FindNode的递归调用
 func (node *KademliaNode) Lookup(key *big.Int) (kElem []string) {
-
+	Sequence := SortList{}
+	Sequence.Initialize(key)
+	var firstKElem []string
+	node.FindNode(key, &firstKElem)
+	for i := range firstKElem {
+		Sequence.Insert(firstKElem[i])
+	}
+	for {
+		var callList []string
+		callList = Sequence.GetFirstThree()
+		closest := callList[0] //最近的
+		//请求这些结点执行FindNode
+		node.CallConcurrency(callList, &Sequence, key)
+		//这里之所以可以这么写和sort.go里的插入策略有关
+		if Sequence.IsEmpty() || Sequence.GetFront() != closest {
+			callList = Sequence.GetAllUncall()
+			node.CallConcurrency(callList, &Sequence, key)
+			kElem = Sequence.GetFirstK()
+			break
+		}
+	}
+	return kElem
 }
