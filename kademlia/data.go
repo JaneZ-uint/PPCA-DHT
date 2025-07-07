@@ -24,3 +24,13 @@ func (current *Data) Get(addr string) BV {
 	}
 	return BV{true, value}
 }
+
+func (current *Data) GetAll() []KeyValue {
+	current.Lock.RLock()
+	defer current.Lock.RUnlock()
+	var result []KeyValue
+	for k, v := range current.data {
+		result = append(result, KeyValue{k, v})
+	}
+	return result
+}

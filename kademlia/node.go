@@ -26,11 +26,12 @@ var number [m + 1]*big.Int
 type KademliaNode struct {
 	online bool
 	network.NetworkStation
-	BucketList [m + 1]Bucket
-	Addr       string
-	ID         *big.Int
-	data       Data
-	QuitLock   sync.RWMutex
+	BucketList   [m + 1]Bucket
+	Addr         string
+	ID           *big.Int
+	data         Data
+	QuitLock     sync.RWMutex
+	refreshIndex int
 }
 
 type KeyValue struct {
@@ -94,6 +95,7 @@ func (node *KademliaNode) Init(addr string) {
 	node.Addr = addr
 	node.ID = ConsistentHash(addr)
 	node.online = false
+	node.refreshIndex = 150
 }
 
 func (node *KademliaNode) ping(addr string) bool {
@@ -160,9 +162,9 @@ func (node *KademliaNode) Join(addr string) bool {
 // For a quited node, call "Quit" again should have no effect.
 func (node *KademliaNode) Quit() {
 	if node.online {
-		//TODO
 		node.online = false
-		logrus.Info("[Quit]")
+		node.Republish(node.data.GetAll())
+		logrus.Infof("[Quit] Node %s", node.Addr)
 		node.StopRPCServer()
 	}
 }
@@ -172,7 +174,7 @@ func (node *KademliaNode) Quit() {
 func (node *KademliaNode) ForceQuit() {
 	if node.online {
 		node.online = false
-		logrus.Info("[ForceQuit]")
+		logrus.Infof("[ForceQuit] Node %s", node.Addr)
 		node.StopRPCServer()
 	}
 }
@@ -186,6 +188,7 @@ func (node *KademliaNode) ForceQuit() {
 // Kademlia 数据存储的核心是将一个数据存储在整个系统中 k 个距他最近的节点上，所以每加入一个数据都需要Broadcast给很多节点插入
 // 事实上，还应该在每一次资源请求后对结点进行一次update
 func (node *KademliaNode) Put(key string, value string) bool {
+	logrus.Infof("[Put] Node %s", node.Addr)
 	var reply bool
 	node.Publish(KeyValue{key, value}, &reply)
 	return reply
@@ -194,7 +197,12 @@ func (node *KademliaNode) Put(key string, value string) bool {
 // Get a key-value pair from the network.
 // Return "true" and the value if success, "false" otherwise.
 func (node *KademliaNode) Get(key string) (bool, string) {
-	//TODO
+	logrus.Infof("[Get] Node %s", node.Addr)
+	result := node.LookupValue(key)
+	if result.Isget {
+		return true, result.value
+	}
+	return false, ""
 }
 
 // Remove a key-value pair identified by KEY from the network.
@@ -262,27 +270,27 @@ func (node *KademliaNode) CallConcurrency(callList []string, sequence *SortList,
 	var wg sync.WaitGroup
 	for i := range callList {
 		wg.Add(1)
-		go func() {
+		go func(addr string) {
 			defer wg.Done()
 			var list []string
-			err := node.RemoteCall(callList[i], "kademlia.FindNode", key, &list)
+			err := node.RemoteCall(addr, "kademlia.FindNode", key, &list)
 			if err != nil {
 				//addr失活 线程可以直接杀死了
-				node.update(callList[i], false)
-				sequence.Delete(callList[i])
+				node.update(addr, false)
+				sequence.Delete(addr)
 				return
 			}
 			//成功则upd
-			node.update(callList[i], true)
+			node.update(addr, true)
 			for j := range list {
 				sequence.Insert(list[j])
 			}
-		}()
+		}(callList[i])
 	}
 	wg.Wait()
 }
 
-func (node *KademliaNode) CallConcurrencyValue(callList []string, sequence *SortList, key string) BV {
+func (node *KademliaNode) CallValue(callList []string, sequence *SortList, key string) BV {
 	for i := range callList {
 		var reply BV
 		err := node.RemoteCall(callList[i], "kademlia.GetValue", GetvalueInfo{key, node.Addr}, &reply)
@@ -351,20 +359,26 @@ func (node *KademliaNode) LookupValue(key string) BV {
 		callList = Sequence.GetFirstThree()
 		closest := callList[0] //最近的
 		var result BV
-		result = node.CallConcurrencyValue(callList, &Sequence, key)
+		result = node.CallValue(callList, &Sequence, key)
 		if result.Isget {
 			return result
 		}
 		if Sequence.IsEmpty() || Sequence.GetFront() != closest {
 			callList = Sequence.GetAllUncall()
-			result = node.CallConcurrencyValue(callList, &Sequence, key)
+			result = node.CallValue(callList, &Sequence, key)
 			return result
 		}
 	}
 }
 
 func (node *KademliaNode) maintain() {
-	//TODO
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		node.Refresh()
+	}()
+	wg.Wait()
 }
 
 // 单个键值对
@@ -389,23 +403,43 @@ func (node *KademliaNode) Publish(target KeyValue, reply *bool) {
 	for i := range list {
 		//可以并发加入资源
 		wg.Add(1)
-		go func() {
+		go func(addr string) {
 			defer wg.Done()
 			var current Info
-			if node.Addr == list[i] {
+			if node.Addr == addr {
 				node.PutData(Info{target, node.Addr}, nil)
 				return
 			}
 			current.addr = node.Addr
 			current.tmp = target
-			err := node.RemoteCall(list[i], "kademlia.PutData", current, nil)
+			err := node.RemoteCall(addr, "kademlia.PutData", current, nil)
 			if err != nil {
-				node.update(list[i], false)
+				node.update(addr, false)
 				*reply = false
 			} else {
-				node.update(list[i], true)
+				node.update(addr, true)
 			}
-		}()
+		}(list[i])
 	}
 	wg.Wait()
+}
+
+// 一个结点被quit后资源重新发布
+func (node *KademliaNode) Republish(object []KeyValue) {
+	var wg sync.WaitGroup
+	for i := range object {
+		wg.Add(1)
+		go func(target KeyValue) {
+			defer wg.Done()
+			node.Publish(target, new(bool))
+		}(object[i])
+	}
+	wg.Wait()
+}
+
+func (node *KademliaNode) Refresh() {
+	if node.BucketList[node.refreshIndex].Size() < 2 {
+		node.Lookup(number[node.refreshIndex])
+	}
+	node.refreshIndex = rand.Intn(9) + 150
 }
