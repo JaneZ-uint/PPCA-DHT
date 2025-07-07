@@ -51,6 +51,7 @@ func (sortList *SortList) Insert(addr string) {
 			current.next = &newUnit
 			return
 		}
+		current = current.next
 	}
 	newUnit := Unit{current, current.next, addr, dist, false}
 	current.next.prev = &newUnit
@@ -86,6 +87,7 @@ func (sortList *SortList) GetAllUncall() []string {
 		if !current.call {
 			list = append(list, current.addr)
 		}
+		current = current.next
 	}
 	return list
 }

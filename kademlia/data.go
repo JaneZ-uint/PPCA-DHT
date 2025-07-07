@@ -12,7 +12,7 @@ type Data struct {
 func (current *Data) Put(tmp KeyValue) {
 	current.Lock.Lock()
 	defer current.Lock.Unlock()
-	current.data[tmp.key] = tmp.value
+	current.data[tmp.Key] = tmp.Value
 }
 
 func (current *Data) Get(addr string) BV {

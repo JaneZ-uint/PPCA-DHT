@@ -22,6 +22,7 @@ type Bucket struct {
 
 func (bucket *Bucket) Initialize(addr string, node *KademliaNode) {
 	bucket.BucketLock.Lock()
+	defer bucket.BucketLock.Unlock()
 	bucket.num = 0
 	bucket.head = new(ListNode)
 	bucket.tail = new(ListNode)
@@ -33,13 +34,12 @@ func (bucket *Bucket) Initialize(addr string, node *KademliaNode) {
 	bucket.tail.Prev = bucket.head
 	bucket.tail.Next = nil
 	bucket.tail.Addr = ""
-	bucket.BucketLock.Unlock()
 }
 
 func (bucket *Bucket) Size() int {
 	bucket.BucketLock.RLock()
+	defer bucket.BucketLock.RUnlock()
 	size := bucket.num
-	bucket.BucketLock.Unlock()
 	return size
 }
 
@@ -77,29 +77,27 @@ func (bucket *Bucket) MoveToTail(node *ListNode) {
 
 func (bucket *Bucket) Find(addr string) *ListNode {
 	bucket.BucketLock.RLock()
+	defer bucket.BucketLock.RUnlock()
 	current := bucket.head.Next
 	for current != bucket.tail {
 		if current.Addr == addr {
-			bucket.BucketLock.RUnlock()
+			//bucket.BucketLock.RUnlock()
 			return current
 		}
 		current = current.Next
 	}
-	bucket.BucketLock.RUnlock()
 	return nil
 }
 
 func (bucket *Bucket) Delete(current *ListNode) {
-	if current == nil || current.Prev == nil || current.Next == nil {
+	bucket.BucketLock.Lock()
+	defer bucket.BucketLock.Unlock()
+	if current == nil || current.Prev == nil || current.Next == nil || current == bucket.head || current == bucket.tail {
 		return
 	}
-	bucket.BucketLock.Lock()
 	current.Prev.Next = current.Next
 	current.Next.Prev = current.Prev
 	bucket.num--
-	bucket.BucketLock.Unlock()
-	current.Next = nil
-	current.Prev = nil
 }
 
 func (bucket *Bucket) Update(addr string, online bool) {
