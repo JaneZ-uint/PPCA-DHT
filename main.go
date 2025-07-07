@@ -19,7 +19,7 @@ func init() {
 	flag.Usage = usage
 	flag.Parse()
 
-	if help || (testName != "basic" && testName != "advance" && testName != "all") {
+	if help || (testName != "basic" && testName != "advance" && testName != "all" && testName != "extra") {
 		flag.Usage()
 		os.Exit(0)
 	}
@@ -36,6 +36,26 @@ func main() {
 
 	switch testName {
 	case "all":
+		fallthrough
+	case "extra":
+		yellow.Println("Extra Test Begins:")
+		basicPanicked, basicFailedCnt, basicTotalCnt := ConsistencyTest()
+		if basicPanicked {
+			red.Printf("Extra Test Panicked.")
+			os.Exit(0)
+		}
+
+		basicFailRate = float64(basicFailedCnt) / float64(basicTotalCnt)
+		if basicFailRate > basicTestMaxFailRate {
+			red.Printf("Extra test failed with fail rate %.4f\n\n", basicFailRate)
+		} else {
+			green.Printf("Extra test passed with fail rate %.4f\n\n", basicFailRate)
+		}
+
+		if testName == "extra" {
+			break
+		}
+		time.Sleep(afterTestSleepTime)
 		fallthrough
 	case "basic":
 		yellow.Println("Basic Test Begins:")

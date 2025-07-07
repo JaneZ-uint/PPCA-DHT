@@ -15,7 +15,7 @@ const (
 
 	lengthOfKeyValue int = 50
 
-	afterTestSleepTime = 5 * time.Second
+	afterTestSleepTime = 10 * time.Second
 
 	basicTestRoundNum               int     = 5   // 5 rounds in total.
 	basicTestNodeSize               int     = 100 // Nodes are numbered with 0 ~ 100 (101 nodes in total).
@@ -47,6 +47,16 @@ const (
 	QASJoinSleepTime              = time.Second
 	QASAfterJoinSleepTime         = 10 * time.Second
 	QASQuitSleepTime              = 80 * time.Millisecond
+
+	ConsisNodeSize           int     = 50
+	ConsisDeleteSize         int     = 50
+	ConsisPutSize            int     = 500
+	ConsisMaxFailRate        float64 = 0.01
+	ConsisGetSize            int     = 20
+	ConsisAfterRunSleepTime          = 200 * time.Millisecond
+	ConsisJoinSleepTime              = time.Second
+	ConsisAfterJoinSleepTime         = 10 * time.Second
+	ConsisQuitSleepTime              = 80 * time.Millisecond
 )
 
 var (
