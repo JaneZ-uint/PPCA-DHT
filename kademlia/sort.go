@@ -14,10 +14,12 @@ type Unit struct {
 }
 
 type SortList struct {
-	target *big.Int
-	head   *Unit
-	tail   *Unit
-	Lock   sync.RWMutex
+	target   *big.Int
+	head     *Unit
+	tail     *Unit
+	Lock     sync.RWMutex
+	num      int
+	visitmap map[string]bool
 }
 
 func (sortList *SortList) Initialize(target *big.Int) {
@@ -29,6 +31,8 @@ func (sortList *SortList) Initialize(target *big.Int) {
 	sortList.head.prev = nil
 	sortList.tail.prev = sortList.head
 	sortList.tail.next = nil
+	sortList.num = 0
+	sortList.visitmap = make(map[string]bool)
 	sortList.Lock.Unlock()
 }
 
@@ -36,8 +40,13 @@ func (sortList *SortList) Initialize(target *big.Int) {
 func (sortList *SortList) Insert(addr string) {
 	sortList.Lock.Lock()
 	defer sortList.Lock.Unlock()
+	if sortList.visitmap[addr] {
+		return
+	}
+	sortList.visitmap[addr] = true
 	dist := new(big.Int).Xor(ConsistentHash(addr), sortList.target)
 	current := sortList.head
+	sortList.num++
 	if current.next == sortList.tail {
 		newUnit := Unit{current, current.next, addr, dist, false}
 		current.next.prev = &newUnit
@@ -99,10 +108,9 @@ func (sortList *SortList) Delete(addr string) {
 	current := sortList.head.next
 	for current != sortList.tail {
 		if current.addr == addr {
+			sortList.num--
 			current.prev.next = current.next
 			current.next.prev = current.prev
-			current.prev = nil
-			current.next = nil
 			break
 		}
 		current = current.next
@@ -112,10 +120,7 @@ func (sortList *SortList) Delete(addr string) {
 func (sortList *SortList) IsEmpty() bool {
 	sortList.Lock.RLock()
 	defer sortList.Lock.RUnlock()
-	if sortList.head.next == sortList.tail {
-		return true
-	}
-	return false
+	return sortList.num == 0
 }
 
 // 返回最小距离

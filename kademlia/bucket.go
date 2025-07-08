@@ -45,25 +45,23 @@ func (bucket *Bucket) Size() int {
 
 func (bucket *Bucket) PushTail(addr string) {
 	bucket.BucketLock.Lock()
+	defer bucket.BucketLock.Unlock()
+	if bucket.num >= k {
+		return
+	}
 	current := ListNode{bucket.tail.Prev, bucket.tail, addr}
 	bucket.tail.Prev.Next = &current
 	bucket.tail.Prev = &current
 	bucket.num++
-	bucket.BucketLock.Unlock()
 }
 
 func (bucket *Bucket) MoveToTail(node *ListNode) {
 	bucket.BucketLock.Lock()
-	if node == bucket.head || node == bucket.tail || node == nil {
-		bucket.BucketLock.Unlock()
+	defer bucket.BucketLock.Unlock()
+	if node == nil || node == bucket.head || node == bucket.tail {
 		return
 	}
 	if node.Prev == nil || node.Next == nil {
-		bucket.BucketLock.Unlock()
-		return
-	}
-	if node.Next == bucket.tail {
-		bucket.BucketLock.Unlock()
 		return
 	}
 	node.Prev.Next = node.Next
@@ -72,7 +70,6 @@ func (bucket *Bucket) MoveToTail(node *ListNode) {
 	node.Next = bucket.tail
 	bucket.tail.Prev.Next = node
 	bucket.tail.Prev = node
-	bucket.BucketLock.Unlock()
 }
 
 func (bucket *Bucket) Find(addr string) *ListNode {
@@ -106,15 +103,16 @@ func (bucket *Bucket) Update(addr string, online bool) {
 	}
 	current := bucket.Find(addr)
 	if !online {
-		bucket.Delete(current)
+		if current != nil {
+			bucket.Delete(current)
+		}
 		return
 	}
 	if current != nil {
 		bucket.MoveToTail(current)
 		return
 	}
-	size := bucket.Size()
-	if size < k {
+	if bucket.Size() < k {
 		bucket.PushTail(addr)
 		return
 	}
