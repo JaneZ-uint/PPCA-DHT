@@ -95,6 +95,8 @@ func (bucket *Bucket) Delete(current *ListNode) {
 	current.Prev.Next = current.Next
 	current.Next.Prev = current.Prev
 	bucket.num--
+	current.Prev = nil
+	current.Next = nil
 }
 
 func (bucket *Bucket) Update(addr string, online bool) {

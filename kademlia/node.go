@@ -18,7 +18,7 @@ import (
 )
 
 const m = 160
-const k = 20
+const k = 10
 const a = 3
 
 var number [m + 1]*big.Int
@@ -177,9 +177,10 @@ func (node *KademliaNode) Join(addr string) bool {
 // For a quited node, call "Quit" again should have no effect.
 func (node *KademliaNode) Quit() {
 	if node.online {
+		logrus.Infof("[Quit] Node %s", node.Addr)
 		node.online = false
 		node.Republish(node.data.GetAll())
-		logrus.Infof("[Quit] Node %s", node.Addr)
+		logrus.Infof("[Finish Quit] %s", node.Addr)
 		node.StopRPCServer()
 	}
 }
@@ -205,14 +206,14 @@ func (node *KademliaNode) ForceQuit() {
 func (node *KademliaNode) Put(key string, value string) bool {
 	logrus.Infof("[Put] Node %s", node.Addr)
 	var reply bool
-	node.Publish(KeyValue{key, value}, &reply)
+	node.Publish(KeyValue{key, value}, &reply, 0)
 	return reply
 }
 
 // Get a key-value pair from the network.
 // Return "true" and the value if success, "false" otherwise.
 func (node *KademliaNode) Get(key string) (bool, string) {
-	//logrus.Infof("[Get] Node %s", node.Addr)
+	logrus.Infof("[Get] Node %s", node.Addr)
 	result := node.LookupValue(key)
 	if result.Isget {
 		return true, result.Value
@@ -248,7 +249,7 @@ func (node *KademliaNode) FindNode(key *big.Int, kElem *[]string) {
 	if len(*kElem) == k {
 		return
 	}
-	for i := index + 1; i <= m; i++ {
+	for i := index - 1; i >= 0; i-- {
 		list = node.BucketList[i].All()
 		if len(*kElem)+len(list) < k {
 			*kElem = append(*kElem, list...)
@@ -268,7 +269,7 @@ func (node *KademliaNode) FindNode(key *big.Int, kElem *[]string) {
 	if len(*kElem) == k {
 		return
 	}
-	for i := index - 1; i >= 0; i-- {
+	for i := index + 1; i <= m; i++ {
 		list = node.BucketList[i].All()
 		if len(*kElem)+len(list) < k {
 			*kElem = append(*kElem, list...)
@@ -289,12 +290,10 @@ func (node *KademliaNode) FindNode(key *big.Int, kElem *[]string) {
 
 func (node *KademliaNode) CallConcurrency(callList []string, sequence *SortList, key *big.Int) {
 	var wg sync.WaitGroup
-	logrus.Infoln("[CallConcurrency]", len(callList))
 	wg.Add(len(callList))
 	for i := range callList {
 		go func(addr string) {
 			defer wg.Done()
-			logrus.Infoln("[CallConcurrency]Signal", node.Addr)
 			var list []string
 			err := node.RemoteCall(addr, "kademlia.FindnodeRPC", FindNodeInfo{key, node.Addr}, &list)
 			if err != nil {
@@ -339,11 +338,9 @@ func (node *KademliaNode) CallValue(callList []string, sequence *SortList, key s
 // 对FindNode的递归调用
 func (node *KademliaNode) Lookup(key *big.Int) (kElem []string) {
 	Sequence := SortList{}
-	Sequence.Initialize(key)
+	Sequence.Initialize(key, node.Addr)
 	var firstKElem []string
-	logrus.Infoln("[Lookup]Signal 0", node.Addr)
 	node.FindNode(key, &firstKElem)
-	logrus.Infoln("[Lookup]Signal 1", node.Addr)
 	for i := range firstKElem {
 		Sequence.Insert(firstKElem[i])
 	}
@@ -351,19 +348,10 @@ func (node *KademliaNode) Lookup(key *big.Int) (kElem []string) {
 		var callList []string
 		callList = Sequence.GetFirstThree()
 		closest := Sequence.GetFront() //最近的
-		logrus.Infoln("[Lookup]Signal 2", node.Addr)
 		node.CallConcurrency(callList, &Sequence, key)
-		logrus.Infoln("[Lookup]Signal 3", node.Addr)
-		log := "getCallList result [" + node.Addr + "]: "
-		for i := range callList {
-			log = log + callList[i] + "||"
-		}
-		logrus.Info(log)
 		if Sequence.IsEmpty() || Sequence.GetFront() == closest {
 			callList = Sequence.GetAllUncall()
-			logrus.Infoln("[Lookup]Signal 4", node.Addr)
 			node.CallConcurrency(callList, &Sequence, key)
-			logrus.Infoln("[Lookup]Signal 5", node.Addr)
 			kElem = Sequence.GetFirstK()
 			break
 		}
@@ -371,9 +359,39 @@ func (node *KademliaNode) Lookup(key *big.Int) (kElem []string) {
 	return kElem
 }
 
+func (node *KademliaNode) LookupDebug(key *big.Int, j int) (kElem []string) {
+	Sequence := SortList{}
+	Sequence.Initialize(key, node.Addr)
+	var firstKElem []string
+	node.FindNode(key, &firstKElem)
+	for i := range firstKElem {
+		Sequence.Insert(firstKElem[i])
+	}
+	for {
+		var callList []string
+		callList = Sequence.GetFirstThree()
+		closest := Sequence.GetFront() //最近的
+		node.CallConcurrency(callList, &Sequence, key)
+		log := "getCallList result [" + node.Addr + "]: "
+		for i := range callList {
+			log = log + callList[i] + "||"
+		}
+		logrus.Infoln(log, j)
+		if Sequence.IsEmpty() || Sequence.GetFront() == closest {
+			logrus.Infoln("[GetIn] ", j)
+			callList = Sequence.GetAllUncall()
+			node.CallConcurrency(callList, &Sequence, key)
+			kElem = Sequence.GetFirstK()
+			break
+		}
+	}
+	logrus.Infoln("[Lookup Debug]Finish lookup debug", node.Addr, j)
+	return kElem
+}
+
 func (node *KademliaNode) LookupValue(key string) BV {
 	Sequence := SortList{}
-	Sequence.Initialize(ConsistentHash(key))
+	Sequence.Initialize(ConsistentHash(key), node.Addr)
 	var tmp BV
 	node.GetValue(GetvalueInfo{key, node.Addr}, &tmp)
 	if tmp.Isget {
@@ -424,12 +442,11 @@ func (node *KademliaNode) GetValue(target GetvalueInfo, reply *BV) error {
 }
 
 // 资源发布
-func (node *KademliaNode) Publish(target KeyValue, reply *bool) {
-	logrus.Infoln("[Publish]Signal 0", node.Addr)
+func (node *KademliaNode) Publish(target KeyValue, reply *bool, i int) {
 	*reply = false
 	var list []string
-	list = node.Lookup(ConsistentHash(target.Key))
-	logrus.Infoln("[Publish]Signal 1", node.Addr)
+	logrus.Infoln("[Publish]Start lookup debug", node.Addr, i)
+	list = node.LookupDebug(ConsistentHash(target.Key), i)
 	var wg sync.WaitGroup
 	for i := range list {
 		//可以并发加入资源
@@ -459,10 +476,10 @@ func (node *KademliaNode) Republish(object []KeyValue) {
 	var wg sync.WaitGroup
 	for i := range object {
 		wg.Add(1)
-		go func(target KeyValue) {
+		go func(target KeyValue, j int) {
 			defer wg.Done()
-			node.Publish(target, new(bool))
-		}(object[i])
+			node.Publish(target, new(bool), j)
+		}(object[i], i)
 	}
 	wg.Wait()
 }

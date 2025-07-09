@@ -10,7 +10,6 @@ type Unit struct {
 	next *Unit
 	addr string
 	dis  *big.Int
-	call bool
 }
 
 type SortList struct {
@@ -20,9 +19,10 @@ type SortList struct {
 	Lock     sync.RWMutex
 	num      int
 	visitmap map[string]bool
+	callmap  map[string]bool
 }
 
-func (sortList *SortList) Initialize(target *big.Int) {
+func (sortList *SortList) Initialize(target *big.Int, addr string) {
 	sortList.Lock.Lock()
 	sortList.target = target
 	sortList.head = new(Unit)
@@ -33,38 +33,42 @@ func (sortList *SortList) Initialize(target *big.Int) {
 	sortList.tail.next = nil
 	sortList.num = 0
 	sortList.visitmap = make(map[string]bool)
+	sortList.callmap = make(map[string]bool)
+	sortList.callmap[addr] = true
+	sortList.visitmap[addr] = true
 	sortList.Lock.Unlock()
 }
 
 // 顺序插入
-func (sortList *SortList) Insert(addr string) {
+func (sortList *SortList) Insert(addr string) bool {
 	sortList.Lock.Lock()
 	defer sortList.Lock.Unlock()
 	if sortList.visitmap[addr] {
-		return
+		return false
 	}
 	sortList.visitmap[addr] = true
 	dist := new(big.Int).Xor(ConsistentHash(addr), sortList.target)
 	current := sortList.head
 	sortList.num++
 	if current.next == sortList.tail {
-		newUnit := Unit{current, current.next, addr, dist, false}
+		newUnit := Unit{current, current.next, addr, dist}
 		current.next.prev = &newUnit
 		current.next = &newUnit
-		return
+		return true
 	}
 	for current.next != sortList.tail {
 		if dist.Cmp(current.next.dis) < 0 {
-			newUnit := Unit{current, current.next, addr, dist, false}
+			newUnit := Unit{current, current.next, addr, dist}
 			current.next.prev = &newUnit
 			current.next = &newUnit
-			return
+			return true
 		}
 		current = current.next
 	}
-	newUnit := Unit{current, current.next, addr, dist, false}
+	newUnit := Unit{current, current.next, addr, dist}
 	current.next.prev = &newUnit
 	current.next = &newUnit
+	return true
 }
 
 // 前a个未被请求过的结点
@@ -74,9 +78,9 @@ func (sortList *SortList) GetFirstThree() []string {
 	var list []string
 	current := sortList.head.next
 	for current != sortList.tail {
-		if !current.call {
+		if !sortList.callmap[current.addr] {
 			list = append(list, current.addr)
-			current.call = true
+			sortList.callmap[current.addr] = true
 		}
 		if len(list) == a {
 			break
@@ -93,7 +97,7 @@ func (sortList *SortList) GetAllUncall() []string {
 	defer sortList.Lock.RUnlock()
 	current := sortList.head.next
 	for current != sortList.tail {
-		if !current.call {
+		if !sortList.callmap[current.addr] {
 			list = append(list, current.addr)
 		}
 		current = current.next
@@ -111,6 +115,8 @@ func (sortList *SortList) Delete(addr string) {
 			sortList.num--
 			current.prev.next = current.next
 			current.next.prev = current.prev
+			current.prev = nil
+			current.next = nil
 			break
 		}
 		current = current.next
@@ -141,9 +147,9 @@ func (sortList *SortList) GetFirstK() []string {
 	var list []string
 	current := sortList.head.next
 	for current != sortList.tail {
-		if !current.call {
+		if !sortList.callmap[current.addr] {
 			list = append(list, current.addr)
-			current.call = true
+			sortList.callmap[current.addr] = true
 		}
 		if len(list) == k {
 			break
