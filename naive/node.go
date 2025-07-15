@@ -6,6 +6,10 @@
 // When a node joins the network, it will copy all the key-value pairs from another node.
 // Any modification to the key-value pairs will be broadcasted to all the nodes.
 // If any RPC call fails, we simply assume the target node is offline and remove it from the peer list.
+
+// 这种naive的DHT实现方法有多个弊端：
+// 每个结点存储所有键值对（严格上不算DHT，因为DHT各节点存储部分数据）
+// 性能低下（每次的broadcastcall）
 package naive
 
 import (
@@ -20,10 +24,19 @@ import (
 
 // Note: The init() function will be executed when this package is imported.
 // See https://golang.org/doc/effective_go.html#init for more details.
+// rmk：Go中的每个包可以包含1个或多个init函数。这些init函数在main函数执行前自动被调用
+// 若存在多个init函数，则会按顺序执行每个init函数
 func init() {
 	// You can use the logrus package to print pretty logs.
 	// Here we set the log output to a file.
 	f, _ := os.Create("dht-test.log")
+	//这里一个更安全的处理
+	/*
+			f, err := os.Create("dht-test.log")
+			if err != nil {
+		    	log.Fatalf("无法创建日志文件: %v", err)
+			}
+	*/
 	logrus.SetOutput(f)
 }
 
@@ -83,6 +96,7 @@ func (node *Node) StopRPCServer() {
 //
 // Note: An empty interface can hold values of any type. (https://tour.golang.org/methods/14)
 // Re-connect to the client every time can be slow. You can use connection pool to improve the performance.
+// 当前node对象作为client端与其他结点进行通信
 func (node *Node) RemoteCall(addr string, method string, args interface{}, reply interface{}) error {
 	if method != "Node.Ping" {
 		logrus.Infof("[%s] RemoteCall %s %s %v", node.Addr, addr, method, args)
@@ -107,6 +121,7 @@ func (node *Node) RemoteCall(addr string, method string, args interface{}, reply
 // RPC Methods
 //
 
+//Go语言的RPC规则
 // Note: The methods used for RPC must be exported (i.e., Capitalized),
 // and must have two arguments, both exported (or builtin) types.
 // The second argument must be a pointer.
@@ -190,6 +205,7 @@ func (node *Node) broadcastCall(method string, args interface{}, reply interface
 		err := node.RemoteCall(peer, method, args, reply)
 		if err != nil {
 			offlinePeers = append(offlinePeers, peer)
+			//下线结点的数组
 		}
 	}
 	node.peersLock.RUnlock()
@@ -197,6 +213,7 @@ func (node *Node) broadcastCall(method string, args interface{}, reply interface
 		node.peersLock.Lock()
 		for _, peer := range offlinePeers {
 			delete(node.peers, peer)
+			//在当前结点的peers集合里删掉已下线的结点
 		}
 		node.peersLock.Unlock()
 	}
@@ -204,9 +221,11 @@ func (node *Node) broadcastCall(method string, args interface{}, reply interface
 
 func (node *Node) Join(addr string) bool {
 	logrus.Infof("Join %s", addr)
+	//试图加入的网络地址
 	// Copy data from the node at addr.
 	node.dataLock.Lock()
 	node.RemoteCall(addr, "Node.GetData", "", &node.data)
+	//调用远程节点以获取数据
 	node.dataLock.Unlock()
 	// Copy the peer list from the node at addr.
 	node.peersLock.Lock()
@@ -254,6 +273,8 @@ func (node *Node) Delete(key string) bool {
 	return true
 }
 
+// 2种将当前结点从DHT中移出的方法
+// 优雅的
 func (node *Node) Quit() {
 	logrus.Infof("Quit %s", node.Addr)
 	// Inform all the nodes in the network that this node is quitting.
@@ -261,6 +282,7 @@ func (node *Node) Quit() {
 	node.StopRPCServer()
 }
 
+// 强制性的
 func (node *Node) ForceQuit() {
 	logrus.Info("ForceQuit")
 	node.StopRPCServer()

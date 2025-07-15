@@ -138,6 +138,7 @@ func quitAndStabilizeTest() (bool, int, int) {
 	nodeAddresses := new([QASNodeSize + 1]string)
 	kvMap := make(map[string]string)
 	nodesInNetwork := make([]int, 0, QASNodeSize+1)
+	//time.Sleep(10 * time.Second)
 
 	/* Run all nodes. */
 	wg = new(sync.WaitGroup)
