@@ -117,7 +117,7 @@ func download(inputPath, outputPath string, node *dhtNode) error {}
 func getPieces(node *dhtNode, index int, hash [20]byte, ch chan DownloadInfo) {}
 ```
 
-## Acknowlegement
+## Acknowledgement
 1. Chuxi Wu (TA)
 2. Alice
 3. VitalRubbish
